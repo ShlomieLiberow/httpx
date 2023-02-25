@@ -711,7 +711,7 @@ func (r *Runner) RunEnumeration() {
 			if r.options.filterRegex != nil && r.options.filterRegex.MatchString(resp.raw) {
 				continue
 			}
-			if r.options.OutputFilterString != "" && strings.Contains(strings.ToLower(resp.raw), strings.ToLower(r.options.OutputFilterString)) {
+			if r.options.OutputFilterString != "" && match_string_array(r, resp) {
 				continue
 			}
 			if len(r.options.OutputFilterFavicon) > 0 && stringsutil.EqualFoldAny(resp.FavIconMMH3, r.options.OutputFilterFavicon...) {
@@ -875,6 +875,16 @@ func (r *Runner) RunEnumeration() {
 
 func (r *Runner) GetScanOpts() scanOptions {
 	return r.scanopts
+}
+
+func match_string_array(r *Runner, resp Result) bool {
+	str_match := strings.Split(r.options.OutputFilterString, ":")
+	for _, s := range str_match {
+		if strings.Contains(strings.ToLower(resp.raw), strings.ToLower(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) Process(t string, wg *sizedwaitgroup.SizedWaitGroup, protocol string, scanopts *scanOptions, output chan Result) {
