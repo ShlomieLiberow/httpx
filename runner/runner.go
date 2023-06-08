@@ -33,7 +33,7 @@ import (
 	errorutil "github.com/projectdiscovery/utils/errors"
 	mapsutil "github.com/projectdiscovery/utils/maps"
 
-	"github.com/bluele/gcache"
+	"github.com/Mzack9999/gcache"
 	"github.com/logrusorgru/aurora"
 	"github.com/pkg/errors"
 
