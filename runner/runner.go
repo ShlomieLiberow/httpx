@@ -26,7 +26,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	asnmap "github.com/projectdiscovery/asnmap/libs"
 	dsl "github.com/projectdiscovery/dsl"
-	"github.com/projectdiscovery/fastdialer/fastdialer"
 	"github.com/projectdiscovery/httpx/common/customextract"
 	"github.com/projectdiscovery/httpx/common/hashes/jarm"
 	"github.com/projectdiscovery/mapcidr/asn"
@@ -70,7 +69,6 @@ type Runner struct {
 	options         *Options
 	hp              *httpx.HTTPX
 	wappalyzer      *wappalyzer.Wappalyze
-	fastdialer      *fastdialer.Dialer
 	scanopts        ScanOptions
 	hm              *hybrid.HybridMap
 	stats           clistats.StatisticsClient
@@ -95,18 +93,6 @@ func New(options *Options) (*Runner, error) {
 		os.RemoveAll(filepath.Join(options.StoreResponseDir, "response", "index.txt"))
 		os.RemoveAll(filepath.Join(options.StoreResponseDir, "screenshot", "index_screenshot.txt"))
 	}
-	dialerOpts := fastdialer.DefaultOptions
-	dialerOpts.WithDialerHistory = true
-	dialerOpts.MaxRetries = 3
-	dialerOpts.DialerTimeout = time.Duration(options.Timeout) * time.Second
-	if len(options.Resolvers) > 0 {
-		dialerOpts.BaseResolvers = options.Resolvers
-	}
-	fastDialer, err := fastdialer.NewDialer(dialerOpts)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not create dialer")
-	}
-	runner.fastdialer = fastDialer
 
 	httpxOptions := httpx.DefaultOptions
 	// Enables automatically tlsgrab if tlsprobe is requested
@@ -136,6 +122,7 @@ func New(options *Options) (*Runner, error) {
 		httpxOptions.MaxResponseBodySizeToSave = httpxOptions.MaxResponseBodySizeToRead
 	}
 	httpxOptions.Resolvers = options.Resolvers
+	httpxOptions.TlsImpersonate = options.TlsImpersonate
 
 	var key, value string
 	httpxOptions.CustomHeaders = make(map[string]string)
@@ -300,8 +287,6 @@ func New(options *Options) (*Runner, error) {
 		}
 	}
 
-	hmapOptions := hybrid.DefaultDiskOptions
-	hmapOptions.DBType = hybrid.PogrebDB
 	hm, err := hybrid.New(hybrid.DefaultDiskOptions)
 	if err != nil {
 		return nil, err
@@ -376,7 +361,7 @@ func (r *Runner) prepareInput() {
 			numHosts += numTargetsFile
 		}
 	}
-	if fileutil.HasStdin() {
+	if !r.options.DisableStdin && fileutil.HasStdin() {
 		numTargetsStdin, err := r.loadAndCloseFile(os.Stdin)
 		if err != nil {
 			gologger.Fatal().Msgf("Could not read input from stdin: %s\n", err)
@@ -389,11 +374,18 @@ func (r *Runner) prepareInput() {
 		r.stats.AddCounter("hosts", 0)
 		r.stats.AddStatic("startedAt", time.Now())
 		r.stats.AddCounter("requests", 0)
-
-		err := r.stats.Start(makePrintCallback(), time.Duration(r.options.StatsInterval)*time.Second)
+		r.stats.AddDynamic("summary", makePrintCallback())
+		err := r.stats.Start()
 		if err != nil {
 			gologger.Warning().Msgf("Could not create statistics: %s\n", err)
 		}
+
+		r.stats.GetStatResponse(time.Duration(r.options.StatsInterval)*time.Second, func(s string, err error) error {
+			if err != nil && r.options.Verbose {
+				gologger.Error().Msgf("Could not read statistics: %s\n", err)
+			}
+			return nil
+		})
 	}
 }
 
@@ -512,9 +504,9 @@ var (
 	lastRequestsCount float64
 )
 
-func makePrintCallback() func(stats clistats.StatisticsClient) {
+func makePrintCallback() func(stats clistats.StatisticsClient) interface{} {
 	builder := &strings.Builder{}
-	return func(stats clistats.StatisticsClient) {
+	return func(stats clistats.StatisticsClient) interface{} {
 		startedAt, _ := stats.GetStatic("startedAt")
 		duration := time.Since(startedAt.(time.Time))
 
@@ -549,11 +541,12 @@ func makePrintCallback() func(stats clistats.StatisticsClient) {
 		builder.WriteRune(')')
 
 		builder.WriteRune('\n')
-
-		fmt.Fprintf(os.Stderr, "%s", builder.String())
+		statString := builder.String()
+		fmt.Fprintf(os.Stderr, "%s", statString)
 		builder.Reset()
 
 		lastRequestsCount = currentRequests
+		return statString
 	}
 }
 
@@ -562,6 +555,7 @@ func (r *Runner) Close() {
 	// nolint:errcheck // ignore
 	r.hm.Close()
 	r.hp.Dialer.Close()
+	r.ratelimiter.Stop()
 	if r.options.HostMaxErrors >= 0 {
 		r.HostErrorsCache.Purge()
 	}
@@ -677,6 +671,13 @@ func (r *Runner) RunEnumeration() {
 		}
 
 		for resp := range output {
+
+			// call the callback function if any
+			// be careful and check for result.Err
+			if r.options.OnResult != nil {
+				r.options.OnResult(resp)
+			}
+
 			if resp.Err != nil {
 				// Change the error message if any port value passed explicitly
 				if url, err := r.parseURL(resp.URL); err == nil && url.Port() != "" {
@@ -692,7 +693,7 @@ func (r *Runner) RunEnumeration() {
 				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.StoredResponsePath, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
 				_, _ = indexFile.WriteString(indexData)
 			}
-			if indexScreenshotFile != nil {
+			if indexScreenshotFile != nil && resp.ScreenshotPath != "" {
 				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.ScreenshotPath, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
 				_, _ = indexScreenshotFile.WriteString(indexData)
 			}
@@ -996,7 +997,7 @@ func (r *Runner) process(t string, wg *sizedwaitgroup.SizedWaitGroup, hp *httpx.
 							gologger.Warning().Msgf("failed to update port of %v got %v", target.Host, err)
 						} else {
 							urlx.UpdatePort(fmt.Sprint(port))
-							target.Host = urlx.Host
+							target.Host = urlx.String()
 						}
 						result := r.analyze(hp, protocol, target, method, t, scanopts)
 						output <- result
@@ -1612,7 +1613,7 @@ retry:
 	}
 	jarmhash := ""
 	if r.options.Jarm {
-		jarmhash = jarm.Jarm(r.fastdialer, fullURL, r.options.Timeout)
+		jarmhash = jarm.Jarm(r.hp.Dialer, fullURL, r.options.Timeout)
 		builder.WriteString(" [")
 		if !scanopts.OutputWithNoColor {
 			builder.WriteString(aurora.Magenta(jarmhash).String())
@@ -1699,12 +1700,12 @@ retry:
 		headlessBody    string
 	)
 	if scanopts.Screenshot {
-		screenshotPath = fileutilz.AbsPathOrDefault(filepath.Join(screenshotBaseDir, screenshotResponseFile))
 		var err error
 		screenshotBytes, headlessBody, err = r.browser.ScreenshotWithBody(fullURL, r.hp.Options.Timeout)
 		if err != nil {
 			gologger.Warning().Msgf("Could not take screenshot '%s': %s", fullURL, err)
 		} else {
+			screenshotPath = fileutilz.AbsPathOrDefault(filepath.Join(screenshotBaseDir, screenshotResponseFile))
 			_ = fileutil.CreateFolder(screenshotBaseDir)
 			err := os.WriteFile(screenshotPath, screenshotBytes, 0644)
 			if err != nil {
@@ -1762,9 +1763,6 @@ retry:
 		ScreenshotBytes:    screenshotBytes,
 		ScreenshotPath:     screenshotPath,
 		HeadlessBody:       headlessBody,
-	}
-	if r.options.OnResult != nil {
-		r.options.OnResult(result)
 	}
 	return result
 }
