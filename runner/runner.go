@@ -62,7 +62,6 @@ import (
 	fileutilz "github.com/projectdiscovery/httpx/common/fileutil"
 	"github.com/projectdiscovery/httpx/common/httputilz"
 	"github.com/projectdiscovery/httpx/common/httpx"
-	"github.com/projectdiscovery/httpx/common/slice"
 	"github.com/projectdiscovery/httpx/common/stringz"
 	"github.com/projectdiscovery/mapcidr"
 	"github.com/projectdiscovery/rawhttp"
@@ -106,7 +105,7 @@ func New(options *Options) (*Runner, error) {
 		options: options,
 	}
 	var err error
-	if options.TechDetect != "false" {
+	if options.TechDetect || options.JSONOutput || options.CSVOutput {
 		runner.wappalyzer, err = wappalyzer.New()
 	}
 	if err != nil {
@@ -276,7 +275,7 @@ func New(options *Options) (*Runner, error) {
 	scanopts.OutputResponseTime = options.OutputResponseTime
 	scanopts.NoFallback = options.NoFallback
 	scanopts.NoFallbackScheme = options.NoFallbackScheme
-	scanopts.TechDetect = options.TechDetect
+	scanopts.TechDetect = options.TechDetect || options.JSONOutput || options.CSVOutput
 	scanopts.StoreChain = options.StoreChain
 	scanopts.StoreVisionReconClusters = options.StoreVisionReconClusters
 	scanopts.MaxResponseBodySizeToSave = options.MaxResponseBodySizeToSave
@@ -786,14 +785,8 @@ func (r *Runner) RunEnumeration() {
 		}
 
 		for resp := range output {
-
 			if r.options.SniName != "" {
 				resp.SNI = r.options.SniName
-			}
-			// call the callback function if any
-			// be careful and check for result.Err
-			if r.options.OnResult != nil {
-				r.options.OnResult(resp)
 			}
 
 			if resp.Err != nil {
@@ -805,15 +798,6 @@ func (r *Runner) RunEnumeration() {
 			}
 			if resp.str == "" {
 				continue
-			}
-
-			if indexFile != nil {
-				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.StoredResponsePath, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
-				_, _ = indexFile.WriteString(indexData)
-			}
-			if indexScreenshotFile != nil && resp.ScreenshotPathRel != "" {
-				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.ScreenshotPathRel, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
-				_, _ = indexScreenshotFile.WriteString(indexData)
 			}
 
 			// apply matchers and filters
@@ -836,16 +820,16 @@ func (r *Runner) RunEnumeration() {
 				logFilteredErrorPage(resp.URL)
 				continue
 			}
-			if len(r.options.filterStatusCode) > 0 && slice.IntSliceContains(r.options.filterStatusCode, resp.StatusCode) {
+			if len(r.options.filterStatusCode) > 0 && sliceutil.Contains(r.options.filterStatusCode, resp.StatusCode) {
 				continue
 			}
-			if len(r.options.filterContentLength) > 0 && slice.IntSliceContains(r.options.filterContentLength, resp.ContentLength) {
+			if len(r.options.filterContentLength) > 0 && sliceutil.Contains(r.options.filterContentLength, resp.ContentLength) {
 				continue
 			}
-			if len(r.options.filterLinesCount) > 0 && slice.IntSliceContains(r.options.filterLinesCount, resp.Lines) {
+			if len(r.options.filterLinesCount) > 0 && sliceutil.Contains(r.options.filterLinesCount, resp.Lines) {
 				continue
 			}
-			if len(r.options.filterWordsCount) > 0 && slice.IntSliceContains(r.options.filterWordsCount, resp.Words) {
+			if len(r.options.filterWordsCount) > 0 && sliceutil.Contains(r.options.filterWordsCount, resp.Words) {
 				continue
 			}
 			if r.options.filterRegex != nil && r.options.filterRegex.MatchString(resp.Raw) {
@@ -857,25 +841,25 @@ func (r *Runner) RunEnumeration() {
 			if len(r.options.OutputFilterFavicon) > 0 && stringsutil.EqualFoldAny(resp.FavIconMMH3, r.options.OutputFilterFavicon...) {
 				continue
 			}
-			if len(r.options.matchStatusCode) > 0 && !slice.IntSliceContains(r.options.matchStatusCode, resp.StatusCode) {
+			if len(r.options.matchStatusCode) > 0 && !sliceutil.Contains(r.options.matchStatusCode, resp.StatusCode) {
 				continue
 			}
-			if len(r.options.matchContentLength) > 0 && !slice.IntSliceContains(r.options.matchContentLength, resp.ContentLength) {
+			if len(r.options.matchContentLength) > 0 && !sliceutil.Contains(r.options.matchContentLength, resp.ContentLength) {
 				continue
 			}
 			if r.options.matchRegex != nil && !r.options.matchRegex.MatchString(resp.Raw) {
 				continue
 			}
-			if r.options.OutputMatchString != "" && !strings.Contains(strings.ToLower(resp.Raw), strings.ToLower(r.options.OutputMatchString)) {
+			if r.options.OutputMatchString != "" && !stringsutil.ContainsAnyI(resp.Raw, r.options.OutputMatchString) {
 				continue
 			}
 			if len(r.options.OutputMatchFavicon) > 0 && !stringsutil.EqualFoldAny(resp.FavIconMMH3, r.options.OutputMatchFavicon...) {
 				continue
 			}
-			if len(r.options.matchLinesCount) > 0 && !slice.IntSliceContains(r.options.matchLinesCount, resp.Lines) {
+			if len(r.options.matchLinesCount) > 0 && !sliceutil.Contains(r.options.matchLinesCount, resp.Lines) {
 				continue
 			}
-			if len(r.options.matchWordsCount) > 0 && !slice.IntSliceContains(r.options.matchWordsCount, resp.Words) {
+			if len(r.options.matchWordsCount) > 0 && !sliceutil.Contains(r.options.matchWordsCount, resp.Words) {
 				continue
 			}
 			if len(r.options.OutputMatchCdn) > 0 && !stringsutil.EqualFoldAny(resp.CDNName, r.options.OutputMatchCdn...) {
@@ -884,6 +868,72 @@ func (r *Runner) RunEnumeration() {
 			if len(r.options.OutputFilterCdn) > 0 && stringsutil.EqualFoldAny(resp.CDNName, r.options.OutputFilterCdn...) {
 				continue
 			}
+
+			// call the callback function if any
+			// be careful and check for result.Err
+			if r.options.OnResult != nil {
+				r.options.OnResult(resp)
+			}
+
+			// store responses or chain in directory
+			URL, _ := urlutil.Parse(resp.URL)
+			domainFile := resp.Method + ":" + URL.EscapedString()
+			hash := hashes.Sha1([]byte(domainFile))
+			domainResponseFile := fmt.Sprintf("%s.txt", hash)
+			screenshotResponseFile := fmt.Sprintf("%s.png", hash)
+			hostFilename := strings.ReplaceAll(URL.Host, ":", "_")
+			domainResponseBaseDir := filepath.Join(r.options.StoreResponseDir, "response")
+			domainScreenshotBaseDir := filepath.Join(r.options.StoreResponseDir, "screenshot")
+			responseBaseDir := filepath.Join(domainResponseBaseDir, hostFilename)
+			screenshotBaseDir := filepath.Join(domainScreenshotBaseDir, hostFilename)
+
+			var responsePath, screenshotPath, screenshotPathRel string
+			// store response
+			if r.scanopts.StoreResponse || r.scanopts.StoreChain {
+				responsePath = fileutilz.AbsPathOrDefault(filepath.Join(responseBaseDir, domainResponseFile))
+				// URL.EscapedString returns that can be used as filename
+				respRaw := resp.Raw
+				reqRaw := resp.RequestRaw
+				if len(respRaw) > r.scanopts.MaxResponseBodySizeToSave {
+					respRaw = respRaw[:r.scanopts.MaxResponseBodySizeToSave]
+				}
+				data := reqRaw
+				if r.options.StoreChain && resp.Response.HasChain() {
+					data = append(data, append([]byte("\n"), []byte(resp.Response.GetChain())...)...)
+				}
+				data = append(data, respRaw...)
+				data = append(data, []byte("\n\n\n")...)
+				data = append(data, []byte(resp.URL)...)
+				_ = fileutil.CreateFolder(responseBaseDir)
+				writeErr := os.WriteFile(responsePath, data, 0644)
+				if writeErr != nil {
+					gologger.Error().Msgf("Could not write response at path '%s', to disk: %s", responsePath, writeErr)
+				}
+				resp.StoredResponsePath = responsePath
+			}
+
+			if r.scanopts.Screenshot {
+				screenshotPath = fileutilz.AbsPathOrDefault(filepath.Join(screenshotBaseDir, screenshotResponseFile))
+				screenshotPathRel = filepath.Join(hostFilename, screenshotResponseFile)
+				_ = fileutil.CreateFolder(screenshotBaseDir)
+				err := os.WriteFile(screenshotPath, resp.ScreenshotBytes, 0644)
+				if err != nil {
+					gologger.Error().Msgf("Could not write screenshot at path '%s', to disk: %s", screenshotPath, err)
+				}
+
+				resp.ScreenshotPath = screenshotPath
+				resp.ScreenshotPathRel = screenshotPathRel
+			}
+
+			if indexFile != nil {
+				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.StoredResponsePath, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
+				_, _ = indexFile.WriteString(indexData)
+			}
+			if indexScreenshotFile != nil && resp.ScreenshotPathRel != "" {
+				indexData := fmt.Sprintf("%s %s (%d %s)\n", resp.ScreenshotPathRel, resp.URL, resp.StatusCode, http.StatusText(resp.StatusCode))
+				_, _ = indexScreenshotFile.WriteString(indexData)
+			}
+
 			if r.options.OutputMatchResponseTime != "" {
 				filterOps := FilterOperator{flag: "-mrt, -match-response-time"}
 				operator, value, err := filterOps.Parse(r.options.OutputMatchResponseTime)
@@ -1318,7 +1368,7 @@ func (r *Runner) targets(hp *httpx.HTTPX, target string) chan httpx.Target {
 				results <- httpx.Target{Host: target}
 				return
 			}
-			ips, _, err := getDNSData(hp, URL.Host)
+			ips, _, _, err := getDNSData(hp, URL.Host)
 			if err != nil || len(ips) == 0 {
 				results <- httpx.Target{Host: target}
 				return
@@ -1600,8 +1650,12 @@ retry:
 		builder.WriteRune(']')
 	}
 
-	title := httpx.ExtractTitle(resp)
-	if scanopts.OutputTitle {
+	var title string
+	if httpx.CanHaveTitleTag(resp.GetHeaderPart("Content-Type", ";")) {
+		title = httpx.ExtractTitle(resp)
+	}
+
+	if scanopts.OutputTitle && title != "" {
 		builder.WriteString(" [")
 		if !scanopts.OutputWithNoColor {
 			builder.WriteString(aurora.Cyan(title).String())
@@ -1755,9 +1809,19 @@ retry:
 	if err != nil {
 		onlyHost = URL.Host
 	}
-	ips, cnames, err := getDNSData(hp, onlyHost)
+	allIps, cnames, resolvers, err := getDNSData(hp, onlyHost)
 	if err != nil {
-		ips = append(ips, ip)
+		allIps = append(allIps, ip)
+	}
+
+	var ips4, ips6 []string
+	for _, ip := range allIps {
+		switch {
+		case iputil.IsIPv4(ip):
+			ips4 = append(ips4, ip)
+		case iputil.IsIPv6(ip):
+			ips6 = append(ips6, ip)
+		}
 	}
 
 	if scanopts.OutputCName && len(cnames) > 0 {
@@ -1774,25 +1838,14 @@ retry:
 		builder.WriteString(fmt.Sprintf(" [%s]", resp.Duration))
 	}
 
+	technologyDetails := make(map[string]wappalyzer.AppInfo)
 	var technologies []string
-	if scanopts.TechDetect != "false" {
-		matches := r.wappalyzer.Fingerprint(resp.Headers, resp.Data)
-		for match := range matches {
+	if scanopts.TechDetect {
+		matches := r.wappalyzer.FingerprintWithInfo(resp.Headers, resp.Data)
+		for match, data := range matches {
 			technologies = append(technologies, match)
+			technologyDetails[match] = data
 		}
-	}
-
-	if scanopts.TechDetect == "true" && len(technologies) > 0 {
-		sort.Strings(technologies)
-		technologies := strings.Join(technologies, ",")
-
-		builder.WriteString(" [")
-		if !scanopts.OutputWithNoColor {
-			builder.WriteString(aurora.Magenta(technologies).String())
-		} else {
-			builder.WriteString(technologies)
-		}
-		builder.WriteRune(']')
 	}
 
 	var extractRegex []string
@@ -1922,41 +1975,6 @@ retry:
 		builder.WriteRune(']')
 	}
 
-	// store responses or chain in directory
-	domainFile := method + ":" + URL.EscapedString()
-	hash := hashes.Sha1([]byte(domainFile))
-	domainResponseFile := fmt.Sprintf("%s.txt", hash)
-	screenshotResponseFile := fmt.Sprintf("%s.png", hash)
-	hostFilename := strings.ReplaceAll(URL.Host, ":", "_")
-	domainResponseBaseDir := filepath.Join(scanopts.StoreResponseDirectory, "response")
-	domainScreenshotBaseDir := filepath.Join(scanopts.StoreResponseDirectory, "screenshot")
-	responseBaseDir := filepath.Join(domainResponseBaseDir, hostFilename)
-	screenshotBaseDir := filepath.Join(domainScreenshotBaseDir, hostFilename)
-
-	var responsePath, screenshotPath, screenshotPathRel string
-	// store response
-	if scanopts.StoreResponse || scanopts.StoreChain {
-		responsePath = fileutilz.AbsPathOrDefault(filepath.Join(responseBaseDir, domainResponseFile))
-		// URL.EscapedString returns that can be used as filename
-		respRaw := resp.Raw
-		reqRaw := requestDump
-		if len(respRaw) > scanopts.MaxResponseBodySizeToSave {
-			respRaw = respRaw[:scanopts.MaxResponseBodySizeToSave]
-		}
-		data := reqRaw
-		if scanopts.StoreChain && resp.HasChain() {
-			data = append(data, append([]byte("\n"), []byte(resp.GetChain())...)...)
-		}
-		data = append(data, respRaw...)
-		data = append(data, []byte("\n\n\n")...)
-		data = append(data, []byte(fullURL)...)
-		_ = fileutil.CreateFolder(responseBaseDir)
-		writeErr := os.WriteFile(responsePath, data, 0644)
-		if writeErr != nil {
-			gologger.Error().Msgf("Could not write response at path '%s', to disk: %s", responsePath, writeErr)
-		}
-	}
-
 	parsed, err := r.parseURL(fullURL)
 	if err != nil {
 		return Result{URL: fullURL, Input: origInput, Err: errors.Wrap(err, "could not parse url")}
@@ -1995,19 +2013,22 @@ retry:
 		if err != nil {
 			gologger.Warning().Msgf("Could not take screenshot '%s': %s", fullURL, err)
 		} else {
-			screenshotPath = fileutilz.AbsPathOrDefault(filepath.Join(screenshotBaseDir, screenshotResponseFile))
-			screenshotPathRel = filepath.Join(hostFilename, screenshotResponseFile)
-			_ = fileutil.CreateFolder(screenshotBaseDir)
-			err := os.WriteFile(screenshotPath, screenshotBytes, 0644)
-			if err != nil {
-				gologger.Error().Msgf("Could not write screenshot at path '%s', to disk: %s", screenshotPath, err)
-			}
-
 			pHash, err = calculatePerceptionHash(screenshotBytes)
 			if err != nil {
 				gologger.Warning().Msgf("%v: %s", err, fullURL)
 			}
 
+			// As we now have headless body, we can also use it for detecting
+			// more technologies in the response. This is a quick trick to get
+			// more detected technologies.
+			if r.options.TechDetect || r.options.JSONOutput || r.options.CSVOutput {
+				moreMatches := r.wappalyzer.FingerprintWithInfo(resp.Headers, []byte(headlessBody))
+				for match, data := range moreMatches {
+					technologies = append(technologies, match)
+					technologyDetails[match] = data
+				}
+				technologies = sliceutil.Dedupe(technologies)
+			}
 		}
 		if scanopts.NoScreenshotBytes {
 			screenshotBytes = []byte{}
@@ -2017,61 +2038,76 @@ retry:
 		}
 	}
 
+	if scanopts.TechDetect && len(technologies) > 0 {
+		sort.Strings(technologies)
+		technologies := strings.Join(technologies, ",")
+
+		builder.WriteString(" [")
+		if !scanopts.OutputWithNoColor {
+			builder.WriteString(aurora.Magenta(technologies).String())
+		} else {
+			builder.WriteString(technologies)
+		}
+		builder.WriteRune(']')
+	}
+
 	result := Result{
-		Timestamp:          time.Now(),
-		Request:            request,
-		ResponseHeaders:    responseHeaders,
-		RawHeaders:         rawResponseHeaders,
-		Scheme:             parsed.Scheme,
-		Port:               finalPort,
-		Path:               finalPath,
-		Raw:                resp.Raw,
-		URL:                fullURL,
-		Input:              origInput,
-		ContentLength:      resp.ContentLength,
-		ChainStatusCodes:   chainStatusCodes,
-		Chain:              chainItems,
-		StatusCode:         resp.StatusCode,
-		Location:           resp.GetHeaderPart("Location", ";"),
-		ContentType:        resp.GetHeaderPart("Content-Type", ";"),
-		Title:              title,
-		str:                builder.String(),
-		VHost:              isvhost,
-		WebServer:          serverHeader,
-		ResponseBody:       serverResponseRaw,
-		BodyPreview:        bodyPreview,
-		WebSocket:          isWebSocket,
-		TLSData:            resp.TLSData,
-		CSPData:            resp.CSPData,
-		Pipeline:           pipeline,
-		HTTP2:              http2,
-		Method:             method,
-		Host:               ip,
-		A:                  ips,
-		CNAMEs:             cnames,
-		CDN:                isCDN,
-		CDNName:            cdnName,
-		ResponseTime:       resp.Duration.String(),
-		Technologies:       technologies,
-		FinalURL:           finalURL,
-		FavIconMMH3:        faviconMMH3,
-		FaviconPath:        faviconPath,
-		Hashes:             hashesMap,
-		Extracts:           extractResult,
-		Jarm:               jarmhash,
-		Lines:              resp.Lines,
-		Words:              resp.Words,
-		ASN:                asnResponse,
-		ExtractRegex:       extractRegex,
-		StoredResponsePath: responsePath,
-		ScreenshotBytes:    screenshotBytes,
-		ScreenshotPath:     screenshotPath,
-		ScreenshotPathRel:  screenshotPathRel,
-		HeadlessBody:       headlessBody,
+		Timestamp:        time.Now(),
+		Request:          request,
+		ResponseHeaders:  responseHeaders,
+		RawHeaders:       rawResponseHeaders,
+		Scheme:           parsed.Scheme,
+		Port:             finalPort,
+		Path:             finalPath,
+		Raw:              resp.Raw,
+		URL:              fullURL,
+		Input:            origInput,
+		ContentLength:    resp.ContentLength,
+		ChainStatusCodes: chainStatusCodes,
+		Chain:            chainItems,
+		StatusCode:       resp.StatusCode,
+		Location:         resp.GetHeaderPart("Location", ";"),
+		ContentType:      resp.GetHeaderPart("Content-Type", ";"),
+		Title:            title,
+		str:              builder.String(),
+		VHost:            isvhost,
+		WebServer:        serverHeader,
+		ResponseBody:     serverResponseRaw,
+		BodyPreview:      bodyPreview,
+		WebSocket:        isWebSocket,
+		TLSData:          resp.TLSData,
+		CSPData:          resp.CSPData,
+		Pipeline:         pipeline,
+		HTTP2:            http2,
+		Method:           method,
+		Host:             ip,
+		A:                ips4,
+		AAAA:             ips6,
+		CNAMEs:           cnames,
+		CDN:              isCDN,
+		CDNName:          cdnName,
+		ResponseTime:     resp.Duration.String(),
+		Technologies:     technologies,
+		FinalURL:         finalURL,
+		FavIconMMH3:      faviconMMH3,
+		FaviconPath:      faviconPath,
+		Hashes:           hashesMap,
+		Extracts:         extractResult,
+		Jarm:             jarmhash,
+		Lines:            resp.Lines,
+		Words:            resp.Words,
+		ASN:              asnResponse,
+		ExtractRegex:     extractRegex,
+		ScreenshotBytes:  screenshotBytes,
+		HeadlessBody:     headlessBody,
 		KnowledgeBase: map[string]interface{}{
 			"PageType": r.errorPageClassifier.Classify(respData),
 			"pHash":    pHash,
 		},
+		TechnologyDetails: technologyDetails,
+		Resolvers:         resolvers,
+		RequestRaw:        requestDump,
+		Response:          resp,
 	}
 	return result
 }
@@ -2116,7 +2152,7 @@ func (r *Runner) handleFaviconHash(hp *httpx.HTTPX, req *retryablehttp.Request, 
 	// search in the response of the requested path for element and rel shortcut/mask/apple-touch icon
 	// link with .ico extension (which will be prioritized if available)
 	// if not, any of link from other icons can be requested
-	potentialURLs, err := extractPotentialFavIconsURLs(req, currentResp)
+	potentialURLs, err := extractPotentialFavIconsURLs(currentResp)
 	if err != nil {
 		return "", "", err
 	}
@@ -2158,7 +2194,7 @@ func (r *Runner) calculateFaviconHashWithRaw(data []byte) (string, error) {
 	return fmt.Sprintf("%d", hashNum), nil
 }
 
-func extractPotentialFavIconsURLs(req *retryablehttp.Request, resp *httpx.Response) ([]string, error) {
+func extractPotentialFavIconsURLs(resp *httpx.Response) ([]string, error) {
 	var potentialURLs []string
 	document, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Data))
 	if err != nil {
@@ -2295,15 +2331,16 @@ func (r *Runner) parseURL(url string) (*urlutil.URL, error) {
 	return urlx, err
 }
 
-func getDNSData(hp *httpx.HTTPX, hostname string) (ips, cnames []string, err error) {
+func getDNSData(hp *httpx.HTTPX, hostname string) (ips, cnames, resolvers []string, err error) {
 	dnsData, err := hp.Dialer.GetDNSData(hostname)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	ips = make([]string, 0, len(dnsData.A)+len(dnsData.AAAA))
 	ips = append(ips, dnsData.A...)
 	ips = append(ips, dnsData.AAAA...)
 	cnames = dnsData.CNAME
+	resolvers = append(resolvers, dnsData.Resolver...)
 	return
 }
 
