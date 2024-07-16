@@ -892,7 +892,7 @@ func (r *Runner) RunEnumeration() {
 					continue
 				}
 			}
-			if len(r.options.OutputFilterString) > 0 && stringsutil.ContainsAnyI(resp.Raw, r.options.OutputFilterString...) {
+			if len(r.options.OutputFilterString) > 0 && matchStringArray(r, resp) {
 				continue
 			}
 			if len(r.options.OutputFilterFavicon) > 0 && stringsutil.ContainsAnyI(resp.FavIconMMH3, r.options.OutputFilterFavicon...) {
@@ -1290,6 +1290,16 @@ func openOrCreateFile(resume bool, filename string) *os.File {
 		gologger.Fatal().Msgf("Could not open/create output file '%s': %s\n", filename, err)
 	}
 	return f
+}
+
+func matchStringArray(r *Runner, resp Result) bool {
+	strMatch := strings.Split(r.options.OutputFilterString, ":")
+	for _, s := range strMatch {
+		if strings.Contains(strings.ToLower(resp.Raw), strings.ToLower(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) GetScanOpts() ScanOptions {
